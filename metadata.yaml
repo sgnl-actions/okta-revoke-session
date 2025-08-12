@@ -1,48 +1,39 @@
-name: job-template
-description: Template for SGNL JavaScript jobs - replace with your job description
+name: okta-revoke-session
+description: Revoke all active sessions for an Okta user
 
 # Input parameters for web form generation
 inputs:
-  target:
+  userId:
     type: text
-    description: Target resource identifier (e.g., user email, group ID)
+    description: The Okta user ID whose sessions should be revoked
     required: true
     validation:
       min: 1
       max: 100
 
-  action:
+  oktaDomain:
     type: text
-    description: Action to perform on the target resource
+    description: Your Okta domain (e.g., example.okta.com)
     required: true
     validation:
       min: 1
-      max: 50
-
-  options:
-    type: array
-    description: Additional options for the operation
-    required: false
-    item_type: text
-    validation:
-      max: 10
-
-  dry_run:
-    type: boolean
-    description: Preview changes without executing them
-    required: false
-    default: false
+      max: 255
+      regex: "^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\\.(okta|oktapreview|okta-emea)\\.com$"
 
 # Expected output structure
 outputs:
-  status:
+  userId:
     type: text
-    description: Operation result (success, failed, recovered, etc.)
+    description: The user ID whose sessions were revoked
 
-  target:
+  sessionsRevoked:
+    type: boolean
+    description: Whether sessions were successfully revoked
+
+  oktaDomain:
     type: text
-    description: The target resource that was processed
+    description: The Okta domain where the action was performed
 
-  processed_at:
+  revokedAt:
     type: datetime
-    description: When the operation completed (ISO 8601)
+    description: When the sessions were revoked (ISO 8601)

@@ -1,146 +1,195 @@
 /**
- * SGNL Job Template
- * 
- * This template provides a starting point for implementing SGNL jobs.
- * Replace this implementation with your specific business logic.
+ * Okta Revoke Session Action
+ *
+ * Revokes all active sessions for an Okta user, forcing them to re-authenticate.
+ * This is commonly used for security incidents or when user credentials may be compromised.
  */
+
+/**
+ * Helper function to perform session revocation
+ * @private
+ */
+async function revokeUserSessions(userId, oktaDomain, authToken) {
+  // Safely encode userId to prevent injection
+  const encodedUserId = encodeURIComponent(userId);
+  const url = new URL(`/api/v1/users/${encodedUserId}/sessions`, `https://${oktaDomain}`);
+
+  const authHeader = authToken.startsWith('SSWS ') ? authToken : `SSWS ${authToken}`;
+
+  const response = await fetch(url.toString(), {
+    method: 'DELETE',
+    headers: {
+      'Authorization': authHeader,
+      'Accept': 'application/json',
+      'Content-Type': 'application/json'
+    }
+  });
+
+  return response;
+}
+
 
 export default {
   /**
-   * Main execution handler - implement your job logic here
+   * Main execution handler - revokes all sessions for the specified Okta user
    * @param {Object} params - Job input parameters
+   * @param {string} params.userId - The Okta user ID
+   * @param {string} params.oktaDomain - The Okta domain (e.g., example.okta.com)
    * @param {Object} context - Execution context with env, secrets, outputs
    * @returns {Object} Job results
    */
   invoke: async (params, context) => {
-    console.log('Starting job execution');
-    console.log(`Processing target: ${params.target}`);
-    console.log(`Action: ${params.action}`);
-    
-    // TODO: Replace with your implementation
-    const { target, action, options = [], dry_run = false } = params;
-    
-    if (dry_run) {
-      console.log('DRY RUN: No changes will be made');
+    const { userId, oktaDomain } = params;
+
+    console.log(`Starting Okta session revocation for user: ${userId}`);
+
+    // Validate inputs
+    if (!userId || typeof userId !== 'string') {
+      throw new Error('Invalid or missing userId parameter');
     }
-    
-    // Access environment variables
-    const environment = context.env.ENVIRONMENT || 'development';
-    console.log(`Running in ${environment} environment`);
-    
-    // Access secrets securely (example)
-    if (context.secrets.API_KEY) {
-      console.log(`Using API key ending in ...${context.secrets.API_KEY.slice(-4)}`);
+    if (!oktaDomain || typeof oktaDomain !== 'string') {
+      throw new Error('Invalid or missing oktaDomain parameter');
     }
-    
-    // Use outputs from previous jobs in workflow
-    if (context.outputs && Object.keys(context.outputs).length > 0) {
-      console.log(`Available outputs from ${Object.keys(context.outputs).length} previous jobs`);
-      console.log(`Previous job outputs: ${Object.keys(context.outputs).join(', ')}`);
+
+    // Validate Okta API token is present
+    if (!context.secrets?.OKTA_API_TOKEN) {
+      throw new Error('Missing required secret: OKTA_API_TOKEN');
     }
-    
-    // Simulate work
-    console.log(`Performing ${action} on ${target}...`);
-    
-    if (options.length > 0) {
-      console.log(`Processing ${options.length} options: ${options.join(', ')}`);
+
+    // Make the API request to revoke sessions
+    const response = await revokeUserSessions(
+      userId,
+      oktaDomain,
+      context.secrets.OKTA_API_TOKEN
+    );
+
+    // Handle the response
+    if (response.ok) {
+      // 204 No Content is the expected success response
+      console.log(`Successfully revoked all sessions for user ${userId}`);
+
+      return {
+        userId: userId,
+        sessionsRevoked: true,
+        oktaDomain: oktaDomain,
+        revokedAt: new Date().toISOString()
+      };
     }
-    
-    // Simulate processing time
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    console.log(`Successfully completed ${action} on ${target}`);
-    
-    // Return structured results
-    return {
-      status: dry_run ? 'dry_run_completed' : 'success',
-      target: target,
-      action: action,
-      options_processed: options.length,
-      environment: environment,
-      processed_at: new Date().toISOString(),
-      // Job completed successfully
-    };
+
+    // Handle error responses
+    const statusCode = response.status;
+    let errorMessage = `Failed to revoke sessions: HTTP ${statusCode}`;
+
+    try {
+      const errorBody = await response.json();
+      if (errorBody.errorSummary) {
+        errorMessage = `Failed to revoke sessions: ${errorBody.errorSummary}`;
+      }
+      console.error('Okta API error response:', errorBody);
+    } catch {
+      // Response might not be JSON
+      console.error('Failed to parse error response');
+    }
+
+    // Throw error with status code for proper error handling
+    const error = new Error(errorMessage);
+    error.statusCode = statusCode;
+    throw error;
   },
 
   /**
-   * Error recovery handler - implement error handling logic
+   * Error recovery handler - attempts to recover from retryable errors
    * @param {Object} params - Original params plus error information
    * @param {Object} context - Execution context
    * @returns {Object} Recovery results
    */
   error: async (params, context) => {
-    const { error, target, action } = params;
-    console.error(`Job encountered error while processing ${target}: ${error.message}`);
-    
-    // TODO: Implement your error recovery logic
-    
-    // Example: Retry with different approach
-    if (error.message.includes('rate limit') || error.message.includes('429')) {
-      console.log('Rate limited - implementing backoff strategy');
-      await new Promise(resolve => setTimeout(resolve, 5000));
-      
-      console.log(`Retrying ${action} on ${target} after backoff`);
-      
-      return {
-        status: 'recovered',
-        target: target,
-        recovery_method: 'rate_limit_backoff',
-        original_error: error.message,
-        recovered_at: new Date().toISOString(),
-        // Job completed successfully
-      };
+    const { error, userId, oktaDomain } = params;
+    const statusCode = error.statusCode;
+
+    console.error(`Session revocation failed for user ${userId}: ${error.message}`);
+
+    // Get configurable backoff times from environment
+    const rateLimitBackoffMs = parseInt(context.env?.RATE_LIMIT_BACKOFF_MS || '30000', 10);
+    const serviceErrorBackoffMs = parseInt(context.env?.SERVICE_ERROR_BACKOFF_MS || '10000', 10);
+
+    // Handle rate limiting (429)
+    if (statusCode === 429 || error.message.includes('429') || error.message.includes('rate limit')) {
+      console.log(`Rate limited by Okta API - waiting ${rateLimitBackoffMs}ms before retry`);
+      await new Promise(resolve => setTimeout(resolve, rateLimitBackoffMs));
+
+      console.log(`Retrying session revocation for user ${userId} after rate limit backoff`);
+
+      // Retry the operation using helper function
+      const retryResponse = await revokeUserSessions(
+        userId,
+        oktaDomain,
+        context.secrets.OKTA_API_TOKEN
+      );
+
+      if (retryResponse.ok) {
+        console.log(`Successfully revoked sessions for user ${userId} after retry`);
+
+        return {
+          userId: userId,
+          sessionsRevoked: true,
+          oktaDomain: oktaDomain,
+          revokedAt: new Date().toISOString(),
+          recoveryMethod: 'rate_limit_retry'
+        };
+      }
     }
-    
-    // Example: Fallback approach
-    if (error.message.includes('service unavailable') || error.message.includes('503')) {
-      console.log('Primary service unavailable - using fallback approach');
-      
-      return {
-        status: 'fallback_used',
-        target: target,
-        recovery_method: 'fallback_service',
-        original_error: error.message,
-        recovered_at: new Date().toISOString(),
-        // Job completed successfully
-      };
+
+    // Handle temporary service issues (502, 503, 504)
+    if ([502, 503, 504].includes(statusCode)) {
+      console.log(`Okta service temporarily unavailable - waiting ${serviceErrorBackoffMs}ms before retry`);
+      await new Promise(resolve => setTimeout(resolve, serviceErrorBackoffMs));
+
+      console.log(`Retrying session revocation for user ${userId} after service interruption`);
+
+      // Retry the operation using helper function
+      const retryResponse = await revokeUserSessions(
+        userId,
+        oktaDomain,
+        context.secrets.OKTA_API_TOKEN
+      );
+
+      if (retryResponse.ok) {
+        console.log(`Successfully revoked sessions for user ${userId} after service recovery`);
+
+        return {
+          userId: userId,
+          sessionsRevoked: true,
+          oktaDomain: oktaDomain,
+          revokedAt: new Date().toISOString(),
+          recoveryMethod: 'service_retry'
+        };
+      }
     }
-    
+
     // Cannot recover from this error
-    console.error(`Unable to recover from error for ${target}`);
-    throw new Error(`Unrecoverable error processing ${target}: ${error.message}`);
+    console.error(`Unable to recover from error for user ${userId}`);
+    throw new Error(`Unrecoverable error revoking sessions for user ${userId}: ${error.message}`);
   },
 
   /**
-   * Graceful shutdown handler - implement cleanup logic
+   * Graceful shutdown handler - cleanup when job is halted
    * @param {Object} params - Original params plus halt reason
    * @param {Object} context - Execution context
    * @returns {Object} Cleanup results
    */
-  halt: async (params, context) => {
-    const { reason, target } = params;
-    console.log(`Job is being halted (${reason}) while processing ${target}`);
-    
-    // TODO: Implement your cleanup logic
-    
-    // Save any partial progress
-    if (context.partial_results) {
-      console.log('Saving partial results before shutdown');
-      // Example: await savePartialResults(context.partial_results);
-    }
-    
-    // Clean up resources
-    console.log('Performing cleanup operations');
-    // Example: await cleanupResources();
-    
+  halt: async (params, _context) => {
+    const { reason, userId } = params;
+    console.log(`Session revocation job is being halted (${reason}) for user ${userId}`);
+
+    // No cleanup needed for this simple operation
+    // The DELETE request either completed or didn't
+
     return {
-      status: 'halted',
-      target: target || 'unknown',
+      userId: userId || 'unknown',
       reason: reason,
-      halted_at: new Date().toISOString(),
-      cleanup_completed: true,
-      partial_results_saved: !!context.partial_results,
-      // Job completed successfully
+      haltedAt: new Date().toISOString(),
+      cleanupCompleted: true
     };
   }
 };

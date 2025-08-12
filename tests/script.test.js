@@ -1,193 +1,336 @@
 import { jest } from '@jest/globals';
 import script from '../src/script.mjs';
 
-describe('Job Template Script', () => {
-  const mockContext = {
-    env: {
-      ENVIRONMENT: 'test'
-    },
-    secrets: {
-      API_KEY: 'test-api-key-123456'
-    },
-    outputs: {},
-    partial_results: {},
-    current_step: 'start'
-  };
+// Mock fetch globally
+global.fetch = jest.fn();
+
+describe('Okta Revoke Session Action', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
 
   describe('invoke handler', () => {
-    test('should execute successfully with minimal params', async () => {
+    test('should successfully revoke sessions with valid inputs', async () => {
       const params = {
-        target: 'test-user@example.com',
-        action: 'create'
+        userId: 'user123',
+        oktaDomain: 'example.okta.com'
       };
 
-      const result = await script.invoke(params, mockContext);
-
-      expect(result.status).toBe('success');
-      expect(result.target).toBe('test-user@example.com');
-      expect(result.action).toBe('create');
-      expect(result.status).toBeDefined();
-      expect(result.processed_at).toBeDefined();
-      expect(result.options_processed).toBe(0);
-    });
-
-    test('should handle dry run mode', async () => {
-      const params = {
-        target: 'test-user@example.com',
-        action: 'delete',
-        dry_run: true
-      };
-
-      const result = await script.invoke(params, mockContext);
-
-      expect(result.status).toBe('dry_run_completed');
-      expect(result.target).toBe('test-user@example.com');
-      expect(result.action).toBe('delete');
-    });
-
-    test('should process options array', async () => {
-      const params = {
-        target: 'test-group',
-        action: 'update',
-        options: ['force', 'notify', 'audit']
-      };
-
-      const result = await script.invoke(params, mockContext);
-
-      expect(result.status).toBe('success');
-      expect(result.target).toBe('test-group');
-      expect(result.options_processed).toBe(3);
-    });
-
-    test('should handle context with previous job outputs', async () => {
-      const contextWithOutputs = {
-        ...mockContext,
-        outputs: {
-          'create-user': {
-            user_id: '12345',
-            created_at: '2024-01-15T10:30:00Z'
-          },
-          'assign-groups': {
-            groups_assigned: 3
-          }
+      const context = {
+        secrets: {
+          OKTA_API_TOKEN: 'SSWS test-token-123'
         }
       };
 
+      // Mock successful API response (204 No Content)
+      fetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204
+      });
+
+      const result = await script.invoke(params, context);
+
+      expect(result).toEqual({
+        userId: 'user123',
+        sessionsRevoked: true,
+        oktaDomain: 'example.okta.com',
+        revokedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/)
+      });
+
+      expect(fetch).toHaveBeenCalledWith(
+        'https://example.okta.com/api/v1/users/user123/sessions',
+        {
+          method: 'DELETE',
+          headers: {
+            'Authorization': 'SSWS test-token-123',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+    });
+
+    test('should add SSWS prefix to token if missing', async () => {
       const params = {
-        target: 'user-12345',
-        action: 'finalize'
+        userId: 'user456',
+        oktaDomain: 'test.okta.com'
       };
 
-      const result = await script.invoke(params, contextWithOutputs);
+      const context = {
+        secrets: {
+          OKTA_API_TOKEN: 'token-without-prefix'
+        }
+      };
 
-      expect(result.status).toBe('success');
-      expect(result.target).toBe('user-12345');
-      expect(result.status).toBeDefined();
+      fetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204
+      });
+
+      await script.invoke(params, context);
+
+      expect(fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'Authorization': 'SSWS token-without-prefix'
+          })
+        })
+      );
+    });
+
+    test('should throw error when API token is missing', async () => {
+      const params = {
+        userId: 'user789',
+        oktaDomain: 'example.okta.com'
+      };
+
+      const context = {
+        secrets: {}
+      };
+
+      await expect(script.invoke(params, context)).rejects.toThrow(
+        'Missing required secret: OKTA_API_TOKEN'
+      );
+
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    test('should handle API error responses', async () => {
+      const params = {
+        userId: 'invalid-user',
+        oktaDomain: 'example.okta.com'
+      };
+
+      const context = {
+        secrets: {
+          OKTA_API_TOKEN: 'SSWS test-token'
+        }
+      };
+
+      // Mock 404 Not Found response
+      fetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: async () => ({
+          errorCode: 'E0000007',
+          errorSummary: 'Not found: Resource not found: invalid-user (User)'
+        })
+      });
+
+      const error = await script.invoke(params, context).catch(e => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toContain('Not found: Resource not found');
+      expect(error.statusCode).toBe(404);
+    });
+
+    test('should handle non-JSON error responses', async () => {
+      const params = {
+        userId: 'user123',
+        oktaDomain: 'example.okta.com'
+      };
+
+      const context = {
+        secrets: {
+          OKTA_API_TOKEN: 'SSWS test-token'
+        }
+      };
+
+      // Mock 500 error with non-JSON response
+      fetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => {
+          throw new Error('Invalid JSON');
+        }
+      });
+
+      const error = await script.invoke(params, context).catch(e => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.message).toBe('Failed to revoke sessions: HTTP 500');
+      expect(error.statusCode).toBe(500);
     });
   });
 
   describe('error handler', () => {
-    test('should recover from rate limit errors', async () => {
+    test('should retry on rate limit (429) and succeed', async () => {
       const params = {
-        target: 'test-user@example.com',
-        action: 'create',
+        userId: 'user123',
+        oktaDomain: 'example.okta.com',
         error: {
-          message: 'API rate limit exceeded - 429',
-          code: 'RATE_LIMIT'
+          message: 'Failed to revoke sessions: HTTP 429',
+          statusCode: 429
         }
       };
 
-      const result = await script.error(params, mockContext);
+      const context = {
+        secrets: {
+          OKTA_API_TOKEN: 'SSWS test-token'
+        }
+      };
 
-      expect(result.status).toBe('recovered');
-      expect(result.target).toBe('test-user@example.com');
-      expect(result.recovery_method).toBe('rate_limit_backoff');
-      expect(result.original_error).toContain('rate limit');
-      expect(result.status).toBeDefined();
+      // Mock successful retry
+      fetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204
+      });
+
+      // Mock setTimeout to speed up test
+      jest.useFakeTimers();
+      const resultPromise = script.error(params, context);
+      jest.runAllTimers();
+      const result = await resultPromise;
+      jest.useRealTimers();
+
+      expect(result).toEqual({
+        userId: 'user123',
+        sessionsRevoked: true,
+        oktaDomain: 'example.okta.com',
+        revokedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        recoveryMethod: 'rate_limit_retry'
+      });
+
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
 
-    test('should use fallback for service unavailable', async () => {
+    test('should retry on service unavailable (503) and succeed', async () => {
       const params = {
-        target: 'test-user@example.com',
-        action: 'update',
+        userId: 'user456',
+        oktaDomain: 'test.okta.com',
         error: {
-          message: 'Service unavailable - 503',
-          code: 'SERVICE_UNAVAILABLE'
+          message: 'Service temporarily unavailable',
+          statusCode: 503
         }
       };
 
-      const result = await script.error(params, mockContext);
+      const context = {
+        secrets: {
+          OKTA_API_TOKEN: 'test-token'
+        }
+      };
 
-      expect(result.status).toBe('fallback_used');
-      expect(result.target).toBe('test-user@example.com');
-      expect(result.recovery_method).toBe('fallback_service');
-      expect(result.original_error).toContain('Service unavailable');
+      // Mock successful retry
+      fetch.mockResolvedValueOnce({
+        ok: true,
+        status: 204
+      });
+
+      // Mock setTimeout to speed up test
+      jest.useFakeTimers();
+      const resultPromise = script.error(params, context);
+      jest.runAllTimers();
+      const result = await resultPromise;
+      jest.useRealTimers();
+
+      expect(result).toEqual({
+        userId: 'user456',
+        sessionsRevoked: true,
+        oktaDomain: 'test.okta.com',
+        revokedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        recoveryMethod: 'service_retry'
+      });
     });
 
-    test('should throw for unrecoverable errors', async () => {
+    test('should throw error when cannot recover', async () => {
       const params = {
-        target: 'test-user@example.com',
-        action: 'create',
+        userId: 'user789',
+        oktaDomain: 'example.okta.com',
         error: {
-          message: 'Invalid configuration - missing API key',
-          code: 'CONFIG_ERROR'
+          message: 'Unauthorized: Invalid API token',
+          statusCode: 401
         }
       };
 
-      await expect(script.error(params, mockContext)).rejects.toThrow('Unrecoverable error');
+      const context = {
+        secrets: {
+          OKTA_API_TOKEN: 'invalid-token'
+        }
+      };
+
+      await expect(script.error(params, context)).rejects.toThrow(
+        'Unrecoverable error revoking sessions for user user789: Unauthorized: Invalid API token'
+      );
+
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    test('should handle retry failure after rate limit', async () => {
+      const params = {
+        userId: 'user123',
+        oktaDomain: 'example.okta.com',
+        error: {
+          message: 'Rate limited',
+          statusCode: 429
+        }
+      };
+
+      const context = {
+        secrets: {
+          OKTA_API_TOKEN: 'SSWS test-token'
+        }
+      };
+
+      // Mock failed retry
+      fetch.mockResolvedValueOnce({
+        ok: false,
+        status: 429
+      });
+
+      // Mock setTimeout to speed up test
+      jest.useFakeTimers();
+      const errorPromise = script.error(params, context);
+      jest.runAllTimers();
+
+      await expect(errorPromise).rejects.toThrow(
+        'Unrecoverable error revoking sessions'
+      );
+
+      jest.useRealTimers();
     });
   });
 
   describe('halt handler', () => {
     test('should handle graceful shutdown', async () => {
       const params = {
-        target: 'test-user@example.com',
+        userId: 'user123',
         reason: 'timeout'
       };
 
-      const result = await script.halt(params, mockContext);
+      const context = {};
 
-      expect(result.status).toBe('halted');
-      expect(result.target).toBe('test-user@example.com');
-      expect(result.reason).toBe('timeout');
-      expect(result.cleanup_completed).toBe(true);
-      expect(result.halted_at).toBeDefined();
-      expect(result.status).toBeDefined();
+      const result = await script.halt(params, context);
+
+      expect(result).toEqual({
+        userId: 'user123',
+        reason: 'timeout',
+        haltedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        cleanupCompleted: true
+      });
     });
 
-    test('should save partial results when available', async () => {
-      const contextWithPartialResults = {
-        ...mockContext,
-        partial_results: {
-          processed_count: 5,
-          total_count: 10,
-          completed_items: ['item1', 'item2', 'item3']
-        }
-      };
-
+    test('should handle halt with missing userId', async () => {
       const params = {
-        target: 'batch-operation',
-        reason: 'cancellation'
+        reason: 'cancelled'
       };
 
-      const result = await script.halt(params, contextWithPartialResults);
+      const context = {};
 
-      expect(result.status).toBe('halted');
-      expect(result.partial_results_saved).toBe(true);
-      expect(result.reason).toBe('cancellation');
-    });
+      const result = await script.halt(params, context);
 
-    test('should handle halt without target', async () => {
-      const params = {
-        reason: 'system_shutdown'
-      };
-
-      const result = await script.halt(params, mockContext);
-
-      expect(result.status).toBe('halted');
-      expect(result.target).toBe('unknown');
-      expect(result.reason).toBe('system_shutdown');
-      expect(result.cleanup_completed).toBe(true);
+      expect(result).toEqual({
+        userId: 'unknown',
+        reason: 'cancelled',
+        haltedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        cleanupCompleted: true
+      });
     });
   });
 });

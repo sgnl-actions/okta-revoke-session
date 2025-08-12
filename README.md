@@ -22,7 +22,6 @@ This SGNL action integrates with Okta's REST API to immediately terminate all ac
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `REQUEST_TIMEOUT_MS` | `30000` | Timeout for API requests in milliseconds |
 | `RATE_LIMIT_BACKOFF_MS` | `30000` | Wait time after rate limit (429) errors |
 | `SERVICE_ERROR_BACKOFF_MS` | `10000` | Wait time after service errors (502/503/504) |
 

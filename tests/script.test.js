@@ -19,7 +19,7 @@ describe('Okta Revoke Session Action', () => {
     test('should successfully revoke sessions with valid inputs', async () => {
       const params = {
         userId: 'user123',
-        oktaDomain: 'example.okta.com'
+        address: 'https://example.okta.com'
       };
 
       const context = {
@@ -39,7 +39,7 @@ describe('Okta Revoke Session Action', () => {
       expect(result).toEqual({
         userId: 'user123',
         sessionsRevoked: true,
-        oktaDomain: 'example.okta.com',
+        address: 'https://example.okta.com',
         revokedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/)
       });
 
@@ -59,7 +59,7 @@ describe('Okta Revoke Session Action', () => {
     test('should add SSWS prefix to token if missing', async () => {
       const params = {
         userId: 'user456',
-        oktaDomain: 'test.okta.com'
+        address: 'https://test.okta.com'
       };
 
       const context = {
@@ -88,7 +88,7 @@ describe('Okta Revoke Session Action', () => {
     test('should throw error when API token is missing', async () => {
       const params = {
         userId: 'user789',
-        oktaDomain: 'example.okta.com'
+        address: 'https://example.okta.com'
       };
 
       const context = {
@@ -96,7 +96,7 @@ describe('Okta Revoke Session Action', () => {
       };
 
       await expect(script.invoke(params, context)).rejects.toThrow(
-        'Missing required secret: BEARER_AUTH_TOKEN'
+        'No authentication configured'
       );
 
       expect(fetch).not.toHaveBeenCalled();
@@ -105,7 +105,7 @@ describe('Okta Revoke Session Action', () => {
     test('should handle API error responses', async () => {
       const params = {
         userId: 'invalid-user',
-        oktaDomain: 'example.okta.com'
+        address: 'https://example.okta.com'
       };
 
       const context = {
@@ -134,7 +134,7 @@ describe('Okta Revoke Session Action', () => {
     test('should handle non-JSON error responses', async () => {
       const params = {
         userId: 'user123',
-        oktaDomain: 'example.okta.com'
+        address: 'https://example.okta.com'
       };
 
       const context = {
@@ -164,7 +164,7 @@ describe('Okta Revoke Session Action', () => {
     test('should retry on rate limit (429) and succeed', async () => {
       const params = {
         userId: 'user123',
-        oktaDomain: 'example.okta.com',
+        address: 'https://example.okta.com',
         error: {
           message: 'Failed to revoke sessions: HTTP 429',
           statusCode: 429
@@ -174,6 +174,9 @@ describe('Okta Revoke Session Action', () => {
       const context = {
         secrets: {
           BEARER_AUTH_TOKEN: 'SSWS test-token'
+        },
+        env: {
+          RATE_LIMIT_BACKOFF_MS: '100'  // Reduce backoff time for faster test
         }
       };
 
@@ -183,17 +186,12 @@ describe('Okta Revoke Session Action', () => {
         status: 204
       });
 
-      // Mock setTimeout to speed up test
-      jest.useFakeTimers();
-      const resultPromise = script.error(params, context);
-      jest.runAllTimers();
-      const result = await resultPromise;
-      jest.useRealTimers();
+      const result = await script.error(params, context);
 
       expect(result).toEqual({
         userId: 'user123',
         sessionsRevoked: true,
-        oktaDomain: 'example.okta.com',
+        address: 'https://example.okta.com',
         revokedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
         recoveryMethod: 'rate_limit_retry'
       });
@@ -204,7 +202,7 @@ describe('Okta Revoke Session Action', () => {
     test('should retry on service unavailable (503) and succeed', async () => {
       const params = {
         userId: 'user456',
-        oktaDomain: 'test.okta.com',
+        address: 'https://test.okta.com',
         error: {
           message: 'Service temporarily unavailable',
           statusCode: 503
@@ -214,6 +212,9 @@ describe('Okta Revoke Session Action', () => {
       const context = {
         secrets: {
           BEARER_AUTH_TOKEN: 'test-token'
+        },
+        env: {
+          SERVICE_ERROR_BACKOFF_MS: '100'  // Reduce backoff time for faster test
         }
       };
 
@@ -223,17 +224,12 @@ describe('Okta Revoke Session Action', () => {
         status: 204
       });
 
-      // Mock setTimeout to speed up test
-      jest.useFakeTimers();
-      const resultPromise = script.error(params, context);
-      jest.runAllTimers();
-      const result = await resultPromise;
-      jest.useRealTimers();
+      const result = await script.error(params, context);
 
       expect(result).toEqual({
         userId: 'user456',
         sessionsRevoked: true,
-        oktaDomain: 'test.okta.com',
+        address: 'https://test.okta.com',
         revokedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
         recoveryMethod: 'service_retry'
       });
@@ -242,7 +238,7 @@ describe('Okta Revoke Session Action', () => {
     test('should throw error when cannot recover', async () => {
       const params = {
         userId: 'user789',
-        oktaDomain: 'example.okta.com',
+        address: 'https://example.okta.com',
         error: {
           message: 'Unauthorized: Invalid API token',
           statusCode: 401
@@ -265,7 +261,7 @@ describe('Okta Revoke Session Action', () => {
     test('should handle retry failure after rate limit', async () => {
       const params = {
         userId: 'user123',
-        oktaDomain: 'example.okta.com',
+        address: 'https://example.okta.com',
         error: {
           message: 'Rate limited',
           statusCode: 429
@@ -275,6 +271,9 @@ describe('Okta Revoke Session Action', () => {
       const context = {
         secrets: {
           BEARER_AUTH_TOKEN: 'SSWS test-token'
+        },
+        env: {
+          RATE_LIMIT_BACKOFF_MS: '100'  // Reduce backoff time for faster test
         }
       };
 
@@ -284,16 +283,9 @@ describe('Okta Revoke Session Action', () => {
         status: 429
       });
 
-      // Mock setTimeout to speed up test
-      jest.useFakeTimers();
-      const errorPromise = script.error(params, context);
-      jest.runAllTimers();
-
-      await expect(errorPromise).rejects.toThrow(
+      await expect(script.error(params, context)).rejects.toThrow(
         'Unrecoverable error revoking sessions'
       );
-
-      jest.useRealTimers();
     });
   });
 

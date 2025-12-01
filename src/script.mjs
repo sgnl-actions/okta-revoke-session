@@ -5,18 +5,19 @@
  * This is commonly used for security incidents or when user credentials may be compromised.
  */
 
+import { getBaseUrl, getAuthorizationHeader } from '@sgnl-actions/utils';
+
 /**
  * Helper function to perform session revocation
  * @private
  */
-async function revokeUserSessions(userId, oktaDomain, authToken) {
+async function revokeUserSessions(userId, baseUrl, authHeader) {
   // Safely encode userId to prevent injection
   const encodedUserId = encodeURIComponent(userId);
-  const url = new URL(`/api/v1/users/${encodedUserId}/sessions`, `https://${oktaDomain}`);
+  // Build URL using base URL (already cleaned by getBaseUrl)
+  const url = `${baseUrl}/api/v1/users/${encodedUserId}/sessions`;
 
-  const authHeader = authToken.startsWith('SSWS ') ? authToken : `SSWS ${authToken}`;
-
-  const response = await fetch(url.toString(), {
+  const response = await fetch(url, {
     method: 'DELETE',
     headers: {
       'Authorization': authHeader,
@@ -34,13 +35,30 @@ export default {
    * Main execution handler - revokes all sessions for the specified Okta user
    * @param {Object} params - Job input parameters
    * @param {string} params.userId - The Okta user ID
-   * @param {string} params.oktaDomain - The Okta domain (e.g., example.okta.com)
-   * @param {Object} context - Execution context with env, secrets, outputs
-   * @param {string} context.secrets.BEARER_AUTH_TOKEN - Bearer token for Okta API authentication
+   * @param {string} params.address - Full URL to Okta API (defaults to ADDRESS environment variable)
+   *
+   * @param {Object} context - Execution context with secrets and environment
+   * @param {string} context.environment.ADDRESS - Default Okta API base URL
+   *
+   * The configured auth type will determine which of the following environment variables and secrets are available
+   * @param {string} context.secrets.BEARER_AUTH_TOKEN
+   *
+   * @param {string} context.secrets.BASIC_USERNAME
+   * @param {string} context.secrets.BASIC_PASSWORD
+   *
+   * @param {string} context.secrets.OAUTH2_CLIENT_CREDENTIALS_CLIENT_SECRET
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_AUDIENCE
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_AUTH_STYLE
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_CLIENT_ID
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_SCOPE
+   * @param {string} context.environment.OAUTH2_CLIENT_CREDENTIALS_TOKEN_URL
+   *
+   * @param {string} context.secrets.OAUTH2_AUTHORIZATION_CODE_ACCESS_TOKEN
+   *
    * @returns {Object} Job results
    */
   invoke: async (params, context) => {
-    const { userId, oktaDomain } = params;
+    const { userId } = params;
 
     console.log(`Starting Okta session revocation for user: ${userId}`);
 
@@ -48,20 +66,28 @@ export default {
     if (!userId || typeof userId !== 'string') {
       throw new Error('Invalid or missing userId parameter');
     }
-    if (!oktaDomain || typeof oktaDomain !== 'string') {
-      throw new Error('Invalid or missing oktaDomain parameter');
-    }
 
-    // Validate Okta API token is present
-    if (!context.secrets?.BEARER_AUTH_TOKEN) {
-      throw new Error('Missing required secret: BEARER_AUTH_TOKEN');
+    // Get base URL using utility function
+    const baseUrl = getBaseUrl(params, context);
+
+    // Get authorization header
+    let authHeader = await getAuthorizationHeader(context);
+
+    // Handle Okta's SSWS token format for Bearer auth mode
+    // Okta API tokens use "SSWS" prefix instead of "Bearer"
+    if (authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7); // Remove "Bearer " prefix
+      // If token already has SSWS prefix, use it as-is
+      // Otherwise add SSWS prefix for Okta API tokens
+      authHeader = token.startsWith('SSWS ') ? token : `SSWS ${token}`;
     }
+    // For Basic and OAuth2 modes, use the header as returned by utils
 
     // Make the API request to revoke sessions
     const response = await revokeUserSessions(
       userId,
-      oktaDomain,
-      context.secrets.BEARER_AUTH_TOKEN
+      baseUrl,
+      authHeader
     );
 
     // Handle the response
@@ -72,7 +98,7 @@ export default {
       return {
         userId: userId,
         sessionsRevoked: true,
-        oktaDomain: oktaDomain,
+        address: baseUrl,
         revokedAt: new Date().toISOString()
       };
     }
@@ -105,10 +131,22 @@ export default {
    * @returns {Object} Recovery results
    */
   error: async (params, context) => {
-    const { error, userId, oktaDomain } = params;
+    const { error, userId } = params;
     const statusCode = error.statusCode;
 
     console.error(`Session revocation failed for user ${userId}: ${error.message}`);
+
+    // Get base URL using utility function
+    const baseUrl = getBaseUrl(params, context);
+
+    // Get authorization header
+    let authHeader = await getAuthorizationHeader(context);
+
+    // Handle Okta's SSWS token format for Bearer auth mode
+    if (authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      authHeader = token.startsWith('SSWS ') ? token : `SSWS ${token}`;
+    }
 
     // Get configurable backoff times from environment
     const rateLimitBackoffMs = parseInt(context.env?.RATE_LIMIT_BACKOFF_MS || '30000', 10);
@@ -124,8 +162,8 @@ export default {
       // Retry the operation using helper function
       const retryResponse = await revokeUserSessions(
         userId,
-        oktaDomain,
-        context.secrets.BEARER_AUTH_TOKEN
+        baseUrl,
+        authHeader
       );
 
       if (retryResponse.ok) {
@@ -134,7 +172,7 @@ export default {
         return {
           userId: userId,
           sessionsRevoked: true,
-          oktaDomain: oktaDomain,
+          address: baseUrl,
           revokedAt: new Date().toISOString(),
           recoveryMethod: 'rate_limit_retry'
         };
@@ -151,8 +189,8 @@ export default {
       // Retry the operation using helper function
       const retryResponse = await revokeUserSessions(
         userId,
-        oktaDomain,
-        context.secrets.BEARER_AUTH_TOKEN
+        baseUrl,
+        authHeader
       );
 
       if (retryResponse.ok) {
@@ -161,7 +199,7 @@ export default {
         return {
           userId: userId,
           sessionsRevoked: true,
-          oktaDomain: oktaDomain,
+          address: baseUrl,
           revokedAt: new Date().toISOString(),
           recoveryMethod: 'service_retry'
         };
@@ -182,9 +220,6 @@ export default {
   halt: async (params, _context) => {
     const { reason, userId } = params;
     console.log(`Session revocation job is being halted (${reason}) for user ${userId}`);
-
-    // No cleanup needed for this simple operation
-    // The DELETE request either completed or didn't
 
     return {
       userId: userId || 'unknown',

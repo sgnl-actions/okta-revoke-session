@@ -1,45 +1,70 @@
 # Okta Revoke Session Action
 
-Revoke all active sessions for an Okta user, forcing them to re-authenticate. This action is commonly used for security incidents or when user credentials may be compromised.
+Revoke all active sessions for an Okta user, forcing them to re-authenticate. This is commonly used for security incidents or when user credentials may be compromised.
 
 ## Overview
 
-This SGNL action integrates with Okta's REST API to immediately terminate all active sessions for a specified user. When executed, the user will be logged out of all Okta applications and will need to re-authenticate.
+This SGNL action integrates with Okta to revoke all active sessions for a specified user. When executed, the user will be logged out of all devices and applications, requiring them to re-authenticate.
 
 ## Prerequisites
 
-- Okta API Token with appropriate permissions
-- Okta domain (e.g., `example.okta.com`)
-- Target user's Okta user ID
+- Okta instance
+- API authentication credentials (supports 4 auth methods - see Configuration below)
+- Okta API access with permissions to revoke user sessions
 
 ## Configuration
 
-### Required Secrets
+### Authentication
 
-- `OKTA_API_TOKEN` - Your Okta API token (can be prefixed with "SSWS " or provided without prefix)
+This action supports four authentication methods. Configure one of the following:
 
-### Optional Environment Variables
+#### Option 1: Bearer Token (Okta API Token)
+| Secret | Description |
+|--------|-------------|
+| `BEARER_AUTH_TOKEN` | Okta API token (SSWS format) |
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RATE_LIMIT_BACKOFF_MS` | `30000` | Wait time after rate limit (429) errors |
-| `SERVICE_ERROR_BACKOFF_MS` | `10000` | Wait time after service errors (502/503/504) |
+#### Option 2: Basic Authentication
+| Secret | Description |
+|--------|-------------|
+| `BASIC_USERNAME` | Username for Okta authentication |
+| `BASIC_PASSWORD` | Password for Okta authentication |
+
+#### Option 3: OAuth2 Client Credentials
+| Secret/Environment | Description |
+|-------------------|-------------|
+| `OAUTH2_CLIENT_CREDENTIALS_CLIENT_SECRET` | OAuth2 client secret |
+| `OAUTH2_CLIENT_CREDENTIALS_CLIENT_ID` | OAuth2 client ID |
+| `OAUTH2_CLIENT_CREDENTIALS_TOKEN_URL` | OAuth2 token endpoint URL |
+| `OAUTH2_CLIENT_CREDENTIALS_SCOPE` | OAuth2 scope (optional) |
+| `OAUTH2_CLIENT_CREDENTIALS_AUDIENCE` | OAuth2 audience (optional) |
+| `OAUTH2_CLIENT_CREDENTIALS_AUTH_STYLE` | OAuth2 auth style (optional) |
+
+#### Option 4: OAuth2 Authorization Code
+| Secret | Description |
+|--------|-------------|
+| `OAUTH2_AUTHORIZATION_CODE_ACCESS_TOKEN` | OAuth2 access token |
+
+### Required Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `ADDRESS` | Okta API base URL | `https://dev-12345.okta.com` |
 
 ### Input Parameters
 
 | Parameter | Type | Required | Description | Example |
 |-----------|------|----------|-------------|---------|
-| `userId` | string | Yes | The Okta user ID whose sessions should be revoked | `00u1a2b3c4d5e6f7g8h9` |
-| `oktaDomain` | string | Yes | Your Okta domain | `example.okta.com` |
+| `userId` | string | Yes | The Okta user ID | `00u1234567890abcdef` |
+| `address` | string | No | Okta API base URL (overrides ADDRESS environment variable) | `https://dev-12345.okta.com` |
 
 ### Output Structure
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `userId` | string | The user ID whose sessions were revoked |
+| `userId` | string | The user ID that was processed |
 | `sessionsRevoked` | boolean | Whether sessions were successfully revoked |
-| `oktaDomain` | string | The Okta domain where the action was performed |
-| `revokedAt` | datetime | When the sessions were revoked (ISO 8601) |
+| `address` | string | The Okta API base URL used |
+| `revokedAt` | datetime | When the operation completed (ISO 8601) |
 
 ## Usage Example
 
@@ -55,10 +80,10 @@ This SGNL action integrates with Okta's REST API to immediately terminate all ac
     "type": "nodejs"
   },
   "script_inputs": {
-    "userId": "00u1a2b3c4d5e6f7g8h9",
-    "oktaDomain": "example.okta.com"
+    "userId": "00u1234567890abcdef"
   },
   "environment": {
+    "ADDRESS": "https://dev-12345.okta.com",
     "LOG_LEVEL": "info"
   }
 }
@@ -68,25 +93,41 @@ This SGNL action integrates with Okta's REST API to immediately terminate all ac
 
 ```json
 {
-  "userId": "00u1a2b3c4d5e6f7g8h9",
+  "userId": "00u1234567890abcdef",
   "sessionsRevoked": true,
-  "oktaDomain": "example.okta.com",
+  "address": "https://dev-12345.okta.com",
   "revokedAt": "2024-01-15T10:30:00Z"
 }
 ```
 
+## How It Works
+
+The action performs a DELETE request to the Okta API to revoke all active sessions for the specified user:
+
+1. **Validate Input**: Ensures userId parameter is provided
+2. **Authenticate**: Uses configured authentication method to get authorization
+3. **Revoke Sessions**: Makes DELETE request to `/api/v1/users/{userId}/sessions`
+4. **Return Result**: Confirms sessions were revoked
+
 ## Error Handling
 
-The action includes automatic retry logic for common transient errors:
+The action includes automatic retry logic for transient errors:
 
-### Retryable Errors
-- **429 Rate Limit**: Waits 30 seconds before retrying
-- **502/503/504 Service Issues**: Waits 10 seconds before retrying
+### Retryable Errors (Automatically Retried)
+- **429 Rate Limit**: Okta API rate limit exceeded (configurable backoff)
+- **502/503/504 Service Errors**: Okta API temporarily unavailable
 
-### Non-Retryable Errors
-- **401 Unauthorized**: Invalid API token
-- **404 Not Found**: User doesn't exist
-- **400 Bad Request**: Invalid parameters
+### Fatal Errors (Will Not Retry)
+- **400 Bad Request**: Invalid user ID format
+- **401 Unauthorized**: Invalid authentication credentials
+- **403 Forbidden**: Insufficient permissions
+- **404 Not Found**: User not found
+
+### Error Recovery Configuration
+
+You can configure backoff times via environment variables:
+- `RATE_LIMIT_BACKOFF_MS`: Wait time before retrying after rate limit (default: 30000ms)
+- `SERVICE_ERROR_BACKOFF_MS`: Wait time before retrying after service error (default: 10000ms)
 
 ## Development
 
@@ -100,7 +141,7 @@ npm install
 npm test
 
 # Test locally with mock data
-npm run dev -- --params '{"userId": "test123", "oktaDomain": "dev.okta.com"}'
+npm run dev
 
 # Build for production
 npm run build
@@ -109,11 +150,11 @@ npm run build
 ### Running Tests
 
 The action includes comprehensive unit tests covering:
-- Successful session revocation
-- API token validation
-- Error response handling
-- Retry logic for rate limiting
-- Service interruption recovery
+- Input validation (userId parameter)
+- Authentication handling (all 4 auth methods)
+- Success scenarios
+- Error handling (API errors, missing credentials)
+- Retry logic (rate limiting, service errors)
 
 ```bash
 # Run all tests
@@ -128,42 +169,55 @@ npm run test:coverage
 
 ## Security Considerations
 
-- **API Token Protection**: Never log or expose the Okta API token
-- **Audit Logging**: All session revocations are logged with timestamps
-- **Idempotent Operations**: Safe to retry if network issues occur
-- **Input Validation**: Domain format is validated via regex pattern
+- **Credential Protection**: Never log or expose authentication credentials
+- **Session Impact**: Revoking sessions immediately logs users out of all devices
+- **Audit Logging**: All operations are logged with timestamps
+- **Input Validation**: userId parameter is validated and URL-encoded
+- **Rate Limiting**: Includes configurable delays and retry logic
 
 ## Okta API Reference
 
 This action uses the following Okta API endpoint:
-- [Clear User Sessions](https://developer.okta.com/docs/reference/api/users/#clear-user-sessions)
+- [Clear User Sessions](https://developer.okta.com/docs/reference/api/users/#clear-user-sessions) - DELETE `/api/v1/users/{userId}/sessions`
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **"Missing required secret: OKTA_API_TOKEN"**
-   - Ensure the `OKTA_API_TOKEN` secret is configured in your SGNL environment
+1. **"Invalid or missing userId parameter"**
+   - Ensure the `userId` parameter is provided and is a non-empty string
+   - Verify the user ID exists in your Okta instance
 
-2. **"Not found: Resource not found"**
-   - Verify the user ID exists in your Okta organization
-   - Check that the user ID format is correct
+2. **"No authentication configured"**
+   - Ensure you have configured one of the four supported authentication methods
+   - Check that the required secrets/environment variables are set
 
-3. **"Invalid API token"**
-   - Confirm your API token has the necessary permissions
-   - Verify the token hasn't expired
+3. **"Failed to revoke sessions: HTTP 404"**
+   - Verify the user ID is correct
+   - Check that the user exists in Okta
 
-4. **Rate Limiting**
-   - The action automatically handles rate limits with backoff
-   - Consider batching operations if revoking many sessions
+4. **"Failed to revoke sessions: HTTP 401"**
+   - Verify your authentication credentials are correct
+   - Check that the API token or OAuth credentials are not expired
+
+5. **"Failed to revoke sessions: HTTP 403"**
+   - Ensure your API credentials have permission to revoke user sessions
+   - Check Okta admin console for required permissions
+
+6. **Rate Limiting (429)**
+   - The action automatically retries with exponential backoff
+   - You can configure `RATE_LIMIT_BACKOFF_MS` to adjust retry timing
+   - Consider implementing rate limiting in your workflow
 
 ## Version History
 
 ### v1.0.0
 - Initial release
-- Support for session revocation via Okta API
+- Support for revoking user sessions via Okta API
+- Four authentication methods (Bearer, Basic, OAuth2 Client Credentials, OAuth2 Authorization Code)
+- Integration with @sgnl-actions/utils package
 - Automatic retry logic for transient errors
-- Comprehensive error handling and logging
+- Comprehensive error handling
 
 ## License
 

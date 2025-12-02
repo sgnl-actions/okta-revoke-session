@@ -111,23 +111,15 @@ The action performs a DELETE request to the Okta API to revoke all active sessio
 
 ## Error Handling
 
-The action includes automatic retry logic for transient errors:
+The action includes error handling for common scenarios:
 
-### Retryable Errors (Automatically Retried)
-- **429 Rate Limit**: Okta API rate limit exceeded (configurable backoff)
-- **502/503/504 Service Errors**: Okta API temporarily unavailable
-
-### Fatal Errors (Will Not Retry)
+### HTTP Status Codes
+- **204 No Content**: Successful session revocation (expected response)
 - **400 Bad Request**: Invalid user ID format
 - **401 Unauthorized**: Invalid authentication credentials
 - **403 Forbidden**: Insufficient permissions
 - **404 Not Found**: User not found
-
-### Error Recovery Configuration
-
-You can configure backoff times via environment variables:
-- `RATE_LIMIT_BACKOFF_MS`: Wait time before retrying after rate limit (default: 30000ms)
-- `SERVICE_ERROR_BACKOFF_MS`: Wait time before retrying after service error (default: 10000ms)
+- **429 Rate Limit**: Too many requests
 
 ## Development
 
@@ -154,7 +146,6 @@ The action includes comprehensive unit tests covering:
 - Authentication handling (all 4 auth methods)
 - Success scenarios
 - Error handling (API errors, missing credentials)
-- Retry logic (rate limiting, service errors)
 
 ```bash
 # Run all tests
@@ -173,7 +164,6 @@ npm run test:coverage
 - **Session Impact**: Revoking sessions immediately logs users out of all devices
 - **Audit Logging**: All operations are logged with timestamps
 - **Input Validation**: userId parameter is validated and URL-encoded
-- **Rate Limiting**: Includes configurable delays and retry logic
 
 ## Okta API Reference
 
@@ -203,21 +193,6 @@ This action uses the following Okta API endpoint:
 5. **"Failed to revoke sessions: HTTP 403"**
    - Ensure your API credentials have permission to revoke user sessions
    - Check Okta admin console for required permissions
-
-6. **Rate Limiting (429)**
-   - The action automatically retries with exponential backoff
-   - You can configure `RATE_LIMIT_BACKOFF_MS` to adjust retry timing
-   - Consider implementing rate limiting in your workflow
-
-## Version History
-
-### v1.0.0
-- Initial release
-- Support for revoking user sessions via Okta API
-- Four authentication methods (Bearer, Basic, OAuth2 Client Credentials, OAuth2 Authorization Code)
-- Integration with @sgnl-actions/utils package
-- Automatic retry logic for transient errors
-- Comprehensive error handling
 
 ## License
 

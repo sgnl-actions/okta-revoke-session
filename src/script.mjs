@@ -125,90 +125,19 @@ export default {
   },
 
   /**
-   * Error recovery handler - attempts to recover from retryable errors
+   * Error recovery handler - framework handles retries by default
+   * Only implement if custom recovery logic is needed
    * @param {Object} params - Original params plus error information
    * @param {Object} context - Execution context
    * @returns {Object} Recovery results
    */
-  error: async (params, context) => {
+  error: async (params, _context) => {
     const { error, userId } = params;
-    const statusCode = error.statusCode;
-
     console.error(`Session revocation failed for user ${userId}: ${error.message}`);
 
-    // Get base URL using utility function
-    const baseUrl = getBaseUrl(params, context);
-
-    // Get authorization header
-    let authHeader = await getAuthorizationHeader(context);
-
-    // Handle Okta's SSWS token format for Bearer auth mode
-    if (authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7);
-      authHeader = token.startsWith('SSWS ') ? token : `SSWS ${token}`;
-    }
-
-    // Get configurable backoff times from environment
-    const rateLimitBackoffMs = parseInt(context.env?.RATE_LIMIT_BACKOFF_MS || '30000', 10);
-    const serviceErrorBackoffMs = parseInt(context.env?.SERVICE_ERROR_BACKOFF_MS || '10000', 10);
-
-    // Handle rate limiting (429)
-    if (statusCode === 429 || error.message.includes('429') || error.message.includes('rate limit')) {
-      console.log(`Rate limited by Okta API - waiting ${rateLimitBackoffMs}ms before retry`);
-      await new Promise(resolve => setTimeout(resolve, rateLimitBackoffMs));
-
-      console.log(`Retrying session revocation for user ${userId} after rate limit backoff`);
-
-      // Retry the operation using helper function
-      const retryResponse = await revokeUserSessions(
-        userId,
-        baseUrl,
-        authHeader
-      );
-
-      if (retryResponse.ok) {
-        console.log(`Successfully revoked sessions for user ${userId} after retry`);
-
-        return {
-          userId: userId,
-          sessionsRevoked: true,
-          address: baseUrl,
-          revokedAt: new Date().toISOString(),
-          recoveryMethod: 'rate_limit_retry'
-        };
-      }
-    }
-
-    // Handle temporary service issues (502, 503, 504)
-    if ([502, 503, 504].includes(statusCode)) {
-      console.log(`Okta service temporarily unavailable - waiting ${serviceErrorBackoffMs}ms before retry`);
-      await new Promise(resolve => setTimeout(resolve, serviceErrorBackoffMs));
-
-      console.log(`Retrying session revocation for user ${userId} after service interruption`);
-
-      // Retry the operation using helper function
-      const retryResponse = await revokeUserSessions(
-        userId,
-        baseUrl,
-        authHeader
-      );
-
-      if (retryResponse.ok) {
-        console.log(`Successfully revoked sessions for user ${userId} after service recovery`);
-
-        return {
-          userId: userId,
-          sessionsRevoked: true,
-          address: baseUrl,
-          revokedAt: new Date().toISOString(),
-          recoveryMethod: 'service_retry'
-        };
-      }
-    }
-
-    // Cannot recover from this error
-    console.error(`Unable to recover from error for user ${userId}`);
-    throw new Error(`Unrecoverable error revoking sessions for user ${userId}: ${error.message}`);
+    // Framework handles retries for transient errors (429, 502, 503, 504)
+    // Just re-throw the error to let the framework handle it
+    throw error;
   },
 
   /**

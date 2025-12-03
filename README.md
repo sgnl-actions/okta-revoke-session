@@ -83,8 +83,7 @@ This action supports four authentication methods. Configure one of the following
     "userId": "00u1234567890abcdef"
   },
   "environment": {
-    "ADDRESS": "https://dev-12345.okta.com",
-    "LOG_LEVEL": "info"
+    "ADDRESS": "https://dev-12345.okta.com"
   }
 }
 ```

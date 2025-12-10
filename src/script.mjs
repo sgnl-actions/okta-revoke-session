@@ -5,7 +5,7 @@
  * This is commonly used for security incidents or when user credentials may be compromised.
  */
 
-import { getBaseUrl, getAuthorizationHeader } from '@sgnl-actions/utils';
+import { getBaseURL, getAuthorizationHeader, resolveJSONPathTemplates} from '@sgnl-actions/utils';
 
 /**
  * Helper function to perform session revocation
@@ -58,7 +58,15 @@ export default {
    * @returns {Object} Job results
    */
   invoke: async (params, context) => {
-    const { userId } = params;
+    const jobContext = context.data || {};
+
+    // Resolve JSONPath templates in params
+    const { result: resolvedParams, errors } = resolveJSONPathTemplates(params, jobContext);
+    if (errors.length > 0) {
+      throw new Error(`Failed to resolve template values: ${errors.join(', ')}`);
+    }
+
+    const { userId } = resolvedParams;
 
     console.log(`Starting Okta session revocation for user: ${userId}`);
 
@@ -68,7 +76,7 @@ export default {
     }
 
     // Get base URL using utility function
-    const baseUrl = getBaseUrl(params, context);
+    const baseUrl = getBaseURL(resolvedParams, context);
 
     // Get authorization header
     let authHeader = await getAuthorizationHeader(context);

@@ -48,7 +48,7 @@ This action supports four authentication methods. Configure one of the following
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `ADDRESS` | Okta API base URL | `https://dev-12345.okta.com` |
+| `ADDRESS` | Default Okta API base URL | `https://dev-12345.okta.com` |
 
 ### Input Parameters
 

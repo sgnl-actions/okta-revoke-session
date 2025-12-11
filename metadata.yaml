@@ -11,14 +11,13 @@ inputs:
       min: 1
       max: 100
 
-  oktaDomain:
+  address:
     type: text
-    description: Your Okta domain (e.g., example.okta.com)
-    required: true
+    description: Optional Okta API base URL override
+    required: false
     validation:
       min: 1
-      max: 255
-      regex: "^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]\\.(okta|oktapreview|okta-emea)\\.com$"
+      max: 100
 
 # Expected output structure
 outputs:
@@ -30,9 +29,9 @@ outputs:
     type: boolean
     description: Whether sessions were successfully revoked
 
-  oktaDomain:
+  address:
     type: text
-    description: The Okta domain where the action was performed
+    description: The Okta API base URL used
 
   revokedAt:
     type: datetime

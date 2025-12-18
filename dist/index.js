@@ -508,20 +508,15 @@ var script = {
 
     console.log(`Starting Okta session revocation for user: ${userId}`);
 
-    // Validate inputs
-    if (!userId || typeof userId !== 'string') {
-      throw new Error('Invalid or missing userId parameter');
-    }
-
     // Get base URL using utility function
     const baseUrl = getBaseURL(resolvedParams, context);
 
     // Get authorization header
     let authHeader = await getAuthorizationHeader(context);
 
-    // Handle Okta's SSWS token format for Bearer auth mode
+    // Handle Okta's SSWS token format - only for Bearer token auth mode
     // Okta API tokens use "SSWS" prefix instead of "Bearer"
-    if (authHeader.startsWith('Bearer ')) {
+    if (context.secrets.BEARER_AUTH_TOKEN && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7); // Remove "Bearer " prefix
       // If token already has SSWS prefix, use it as-is
       // Otherwise add SSWS prefix for Okta API tokens

@@ -5,13 +5,13 @@
  * This is commonly used for security incidents or when user credentials may be compromised.
  */
 
-import { getBaseURL, getAuthorizationHeader} from '@sgnl-actions/utils';
+import { getBaseURL, createAuthHeaders} from '@sgnl-actions/utils';
 
 /**
  * Helper function to perform session revocation
  * @private
  */
-async function revokeUserSessions(userId, baseUrl, authHeader) {
+async function revokeUserSessions(userId, baseUrl, headers) {
   // Safely encode userId to prevent injection
   const encodedUserId = encodeURIComponent(userId);
   // Build URL using base URL (already cleaned by getBaseUrl)
@@ -19,11 +19,7 @@ async function revokeUserSessions(userId, baseUrl, authHeader) {
 
   const response = await fetch(url, {
     method: 'DELETE',
-    headers: {
-      'Authorization': authHeader,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json'
-    }
+    headers
   });
 
   return response;
@@ -65,16 +61,16 @@ export default {
     // Get base URL using utility function
     const baseUrl = getBaseURL(params, context);
 
-    // Get authorization header
-    let authHeader = await getAuthorizationHeader(context);
+    // Get headers using utility function
+    let headers = await createAuthHeaders(context);
 
     // Handle Okta's SSWS token format - only for Bearer token auth mode
     // Okta API tokens use "SSWS" prefix instead of "Bearer"
-    if (context.secrets.BEARER_AUTH_TOKEN && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7); // Remove "Bearer " prefix
+    if (context.secrets.BEARER_AUTH_TOKEN && headers['Authorization'].startsWith('Bearer ')) {
+      const token = headers['Authorization'].substring(7); // Remove "Bearer " prefix
       // If token already has SSWS prefix, use it as-is
       // Otherwise add SSWS prefix for Okta API tokens
-      authHeader = token.startsWith('SSWS ') ? token : `SSWS ${token}`;
+      headers['Authorization'] = token.startsWith('SSWS ') ? token : `SSWS ${token}`;
     }
     // For Basic and OAuth2 modes, use the header as returned by utils
 
@@ -82,7 +78,7 @@ export default {
     const response = await revokeUserSessions(
       userId,
       baseUrl,
-      authHeader
+      headers
     );
 
     // Handle the response

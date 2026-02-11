@@ -9,6 +9,11 @@
  */
 
 /**
+ * User-Agent header value for all SGNL CAEP Hub requests.
+ */
+const SGNL_USER_AGENT = 'SGNL-CAEP-Hub/2.0';
+
+/**
  * Get OAuth2 access token using client credentials flow
  * @param {Object} config - OAuth2 configuration
  * @param {string} config.tokenUrl - Token endpoint URL
@@ -39,7 +44,8 @@ async function getClientCredentialsToken(config) {
 
   const headers = {
     'Content-Type': 'application/x-www-form-urlencoded',
-    'Accept': 'application/json'
+    'Accept': 'application/json',
+    'User-Agent': SGNL_USER_AGENT
   };
 
   if (authStyle === 'InParams') {
@@ -158,6 +164,21 @@ function getBaseURL(params, context) {
 }
 
 /**
+ * Create full headers object with Authorization and common headers
+ * @param {Object} context - Execution context with env and secrets
+ * @returns {Promise<Object>} Headers object with Authorization, Accept, Content-Type
+ */
+async function createAuthHeaders(context) {
+  const authHeader = await getAuthorizationHeader(context);
+  return {
+    'Authorization': authHeader,
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'User-Agent': SGNL_USER_AGENT
+  };
+}
+
+/**
  * Okta Revoke Session Action
  *
  * Revokes all active sessions for an Okta user, forcing them to re-authenticate.
@@ -169,7 +190,7 @@ function getBaseURL(params, context) {
  * Helper function to perform session revocation
  * @private
  */
-async function revokeUserSessions(userId, baseUrl, authHeader) {
+async function revokeUserSessions(userId, baseUrl, headers) {
   // Safely encode userId to prevent injection
   const encodedUserId = encodeURIComponent(userId);
   // Build URL using base URL (already cleaned by getBaseUrl)
@@ -177,11 +198,7 @@ async function revokeUserSessions(userId, baseUrl, authHeader) {
 
   const response = await fetch(url, {
     method: 'DELETE',
-    headers: {
-      'Authorization': authHeader,
-      'Accept': 'application/json',
-      'Content-Type': 'application/json'
-    }
+    headers
   });
 
   return response;
@@ -223,16 +240,16 @@ var script = {
     // Get base URL using utility function
     const baseUrl = getBaseURL(params, context);
 
-    // Get authorization header
-    let authHeader = await getAuthorizationHeader(context);
+    // Get headers using utility function
+    let headers = await createAuthHeaders(context);
 
     // Handle Okta's SSWS token format - only for Bearer token auth mode
     // Okta API tokens use "SSWS" prefix instead of "Bearer"
-    if (context.secrets.BEARER_AUTH_TOKEN && authHeader.startsWith('Bearer ')) {
-      const token = authHeader.substring(7); // Remove "Bearer " prefix
+    if (context.secrets.BEARER_AUTH_TOKEN && headers['Authorization'].startsWith('Bearer ')) {
+      const token = headers['Authorization'].substring(7); // Remove "Bearer " prefix
       // If token already has SSWS prefix, use it as-is
       // Otherwise add SSWS prefix for Okta API tokens
-      authHeader = token.startsWith('SSWS ') ? token : `SSWS ${token}`;
+      headers['Authorization'] = token.startsWith('SSWS ') ? token : `SSWS ${token}`;
     }
     // For Basic and OAuth2 modes, use the header as returned by utils
 
@@ -240,7 +257,7 @@ var script = {
     const response = await revokeUserSessions(
       userId,
       baseUrl,
-      authHeader
+      headers
     );
 
     // Handle the response

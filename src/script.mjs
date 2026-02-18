@@ -5,7 +5,7 @@
  * This is commonly used for security incidents or when user credentials may be compromised.
  */
 
-import { getBaseURL, createAuthHeaders} from '@sgnl-actions/utils';
+import { getBaseURL, createAuthHeaders } from '@sgnl-actions/utils';
 
 /**
  * Helper function to perform session revocation

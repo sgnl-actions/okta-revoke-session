@@ -51,7 +51,7 @@ describe('Okta Revoke Session Action', () => {
             'Authorization': 'SSWS test-token-123',
             'Accept': 'application/json',
             'Content-Type': 'application/json',
-            "User-Agent": "SGNL-CAEP-Hub/2.0"
+            'User-Agent': 'SGNL-CAEP-Hub/2.0'
           }
         }
       );

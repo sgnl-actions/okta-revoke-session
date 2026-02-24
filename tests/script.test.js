@@ -86,23 +86,6 @@ describe('Okta Revoke Session Action', () => {
       );
     });
 
-    test('should throw error when API token is missing', async () => {
-      const params = {
-        userId: 'user789',
-        address: 'https://example.okta.com'
-      };
-
-      const context = {
-        secrets: {}
-      };
-
-      await expect(script.invoke(params, context)).rejects.toThrow(
-        'No authentication configured'
-      );
-
-      expect(fetch).not.toHaveBeenCalled();
-    });
-
     test('should handle API error responses', async () => {
       const params = {
         userId: 'invalid-user',

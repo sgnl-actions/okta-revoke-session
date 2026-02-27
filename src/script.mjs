@@ -5,7 +5,7 @@
  * This is commonly used for security incidents or when user credentials may be compromised.
  */
 
-import { getBaseURL, createAuthHeaders } from '@sgnl-actions/utils';
+import { getBaseURL, createHeaders } from '@sgnl-actions/utils';
 
 /**
  * Helper function to perform session revocation
@@ -62,7 +62,7 @@ export default {
     const baseUrl = getBaseURL(params, context);
 
     // Get headers using utility function
-    let headers = await createAuthHeaders(context);
+    let headers = await createHeaders(context);
 
     // Handle Okta's SSWS token format - only for Bearer token auth mode
     // Okta API tokens use "SSWS" prefix instead of "Bearer"
